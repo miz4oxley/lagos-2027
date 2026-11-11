@@ -192,6 +192,8 @@ function zonedToUTC(dtStr, tz) {
     return new Date(guess - (asTz - guess));
   } catch { return new Date(guess); }
 }
+const leaveDay = () => S().leaveDate || (fl().out.depart || '').slice(0, 10) || null;
+const homeDay = () => ymd(dayDate(S().tripDays));
 const flightCode = f => String(f?.flightNo || '').replace(/\s+/g, '').toUpperCase();
 const trackLinks = f => { const c = flightCode(f); return c ? `<a class="linkbtn" href="https://www.flightradar24.com/data/flights/${c.toLowerCase()}" target="_blank" rel="noopener" data-stop>Track ${c} ↗</a> <a class="linkbtn" href="https://www.google.com/search?q=${c}+flight+status" target="_blank" rel="noopener" data-stop>Flight status ↗</a>` : ''; };
 
@@ -351,16 +353,17 @@ function viewHome() {
   const s = S(), start = parseDate(s.tripStart), end = dayDate(s.tripDays);
   const f = fl(), dep = splitDT(f.out.depart), arr = splitDT(f.out.arrive), ret = splitDT(f.back.depart);
   const leftLand = daysBetween(today(), start);
-  const leftFly = dep ? daysBetween(today(), dep.date) : null;
+  const leaveD = leaveDay();
+  const leftFly = leaveD ? daysBetween(today(), parseDate(leaveD)) : null;
   const todos = items('todo').filter(live);
   const open = todos.filter(t => !t.done).sort((a, b) => (dueDate(a) || 9e15) - (dueDate(b) || 9e15));
   const vendors = items('vendor').filter(live);
   const adire = items('guest').filter(g => g.adire && g.rsvp !== 'Not coming').reduce((n, g) => n + (Number(g.people) || 1), 0);
   const pending = [...state.items.values()].filter(needsMyOk);
   let heroTop;
-  if (leftFly != null && leftFly > 0) heroTop = `<div class="big">${leftFly}</div><div class="lbl">day${leftFly === 1 ? '' : 's'} until we fly to Lagos</div>`;
+  if (leftFly != null && leftFly > 0) heroTop = `<div class="big">${leftFly}</div><div class="lbl">day${leftFly === 1 ? '' : 's'} until we leave for Lagos</div>`;
   else if (leftFly === 0) heroTop = `<div class="big">Today ✈︎</div><div class="lbl">We fly to Lagos today!</div>`;
-  else if (leftLand > 0) heroTop = `<div class="big">${leftLand}</div><div class="lbl">days until we land in Lagos${dep ? '' : ' (estimate)'}</div>`;
+  else if (leftLand > 0) heroTop = `<div class="big">${leftLand}</div><div class="lbl">day${leftLand === 1 ? '' : 's'} until we land in Lagos</div>`;
   else if (leftLand > -s.tripDays) heroTop = `<div class="big">Day ${-leftLand + 1}</div><div class="lbl">We're in Lagos! 🇳🇬</div>`;
   else heroTop = `<div class="big">Ẹ kú àbọ̀</div><div class="lbl">Welcome home</div>`;
   const legLine = (ic, label, x, tz, extra = '') => x ? `<div class="leg"><span>${ic}</span><div><b>${label}</b> ${extra}<br>${fmt(x.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTime(x.time) || 'time TBC'} <span class="tz">${tz}</span></div></div>` : '';
@@ -369,12 +372,12 @@ function viewHome() {
       ${legLine('🛬', `Land ${esc(f.out.to || 'Lagos')}`, arr, 'Lagos time')}
       ${legLine('🏠', `Fly home ${esc(f.back.from || '')}`, ret, 'Lagos time', esc(f.back.flightNo || ''))}
       <div style="margin-top:6px">${trackLinks(f.out)}</div></div>`
-    : `<div class="dates">${fmt(start, { month: 'long', day: 'numeric', year: 'numeric' })} → ${fmt(end, { month: 'long', day: 'numeric' })} · ${s.tripDays} days</div>`;
+    : `<div class="dates">${leaveD ? `Leave ${fmt(parseDate(leaveD))} · ` : ''}Land ${fmt(start)} · Home ${fmt(end)} · ${s.tripDays} days</div>`;
   return `
-  <div class="hero" data-act="flights">${heroTop}${flightsHTML}
-    <button class="hero-edit" data-act="flights">✎ ${dep ? 'Edit flights' : 'Add our flights'}</button>
+  <div class="hero" data-act="dates">${heroTop}${flightsHTML}
+    <div class="row wrap" style="position:relative;z-index:1"><button class="hero-edit" data-act="dates">📅 Change dates</button><button class="hero-edit" data-act="flights">✈︎ ${dep ? 'Flight details' : 'Add flight details'}</button></div>
   </div>
-  ${s.placeholderDates && !dep ? `<div class="notice">These are placeholder dates. Tap <b>Add our flights</b> once you book — every day and deadline moves with them.</div>` : ''}
+  ${s.placeholderDates ? `<div class="notice">These are placeholder dates. Tap <b>📅 Change dates</b> to set yours — the countdown, every trip day and every deadline move with them.</div>` : ''}
   ${pending.length ? `<h3>Needs your OK (${pending.length})</h3>${pending.map(it => `<div class="item" data-act="edit" data-id="${it.id}"><div class="thumb">${ICON[it.kind] || '•'}</div><div class="body">
       <div class="t">${esc(itemTitle(it))}</div>
       <div class="m">${it.removeReq ? `${esc(it.removeReq.by)} wants to remove this` : `${esc(it.editedBy || it.addedBy || '')} ${it.editedBy ? 'changed' : 'added'} this · ${esc(SPECS[it.kind].title)}`}</div>
@@ -545,10 +548,10 @@ function viewSettings() {
   const signed = state.mode === 'cloud';
   return `${back('Settings')}
   <div class="card">
-    <button class="btn gold block" data-act="flights">✈︎ ${splitDT(fl().out.depart) ? 'Edit our flights' : 'Add our flights'}</button>
-    <p class="small muted">Adding flights sets the landing date and trip length automatically.</p>
-    <div class="two"><div class="field"><label>Landing date</label><input type="date" id="setStart" value="${esc(s.tripStart)}"></div>
-    <div class="field"><label>Trip length (days)</label><input type="number" id="setDays" min="1" max="60" value="${esc(s.tripDays)}"></div></div>
+    <div class="small muted">Trip dates</div>
+    <div style="margin:4px 0 8px"><b>${leaveDay() ? `Leave ${fmt(parseDate(leaveDay()))} · ` : ''}Land ${fmt(parseDate(s.tripStart))} · Home ${fmt(dayDate(s.tripDays))}</b> <span class="muted small">(${s.tripDays} days)</span></div>
+    <div class="row"><button class="btn gold" style="flex:1" data-act="dates">📅 Change dates</button><button class="btn alt" style="flex:1" data-act="flights">✈︎ Flight details</button></div>
+    <div style="height:10px"></div>
     <div class="field"><label>Naira per $1 (your rate)</label><input type="number" id="setRate" value="${esc(s.rate)}"></div>
     <div class="field"><label>Names on our Adire</label><input type="text" id="setNames" value="${esc(s.adireNames)}"></div>
     <button class="btn block" data-act="saveSettings">Save settings</button>
@@ -654,6 +657,28 @@ function approvalPanel(it) {
     <div class="row" style="margin-top:8px"><input type="text" id="cmtText" class="cmt-in" placeholder="Note to ${esc(others())}…"><button type="button" class="btn sm" data-act="comment">Send</button></div></div>`;
   return h;
 }
+
+/* ---------- trip dates sheet ---------- */
+function openDates() {
+  const s = S();
+  openSheet(`<h2>Trip dates</h2><p class="sub">Change these any time — the countdown, every trip day and every “weeks before” deadline update straight away.</p>
+    <div class="field"><label>We leave the US</label><input type="date" id="dLeave" value="${esc(leaveDay() || ymd(addDays(parseDate(s.tripStart), -1)))}"></div>
+    <div class="field"><label>We land in Lagos (Day 1)</label><input type="date" id="dLand" value="${esc(s.tripStart)}"></div>
+    <div class="field"><label>We fly home</label><input type="date" id="dHome" value="${esc(homeDay())}"></div>
+    <p class="small muted" id="dSummary"></p>
+    <button type="button" class="btn alt block" data-act="flights">✈︎ Add flight numbers & times</button>
+    <div class="sheet-actions"><button type="button" class="btn alt" data-act="close">Cancel</button><button type="button" class="btn" data-act="saveDates">Save dates</button></div>`);
+  updateDateSummary();
+}
+function updateDateSummary() {
+  const l = $('#dLeave')?.value, a = $('#dLand')?.value, h = $('#dHome')?.value, el = $('#dSummary'); if (!el) return;
+  const parts = [];
+  if (l) { const n = daysBetween(today(), parseDate(l)); parts.push(n > 0 ? `${n} days from today` : n === 0 ? 'Leaving today' : 'Already left'); }
+  if (a && h) parts.push(`${daysBetween(parseDate(a), parseDate(h)) + 1} days in Lagos`);
+  el.textContent = parts.join(' · ');
+}
+// Move a flight's date to a new day but keep its time
+const reDate = (dt, day) => dt ? day + (dt.includes('T') ? dt.slice(10) : '') : dt;
 
 /* ---------- flights sheet ---------- */
 function openFlights() {
@@ -874,10 +899,25 @@ document.addEventListener('click', async ev => {
       $('#cmtList').innerHTML = cmtHTML(comments);
       await store.save({ ...base, comments }); } break;
     case 'flights': ev.stopPropagation(); openFlights(); break;
+    case 'dates': ev.stopPropagation(); openDates(); break;
+    case 'saveDates': {
+      const l = $('#dLeave').value, a = $('#dLand').value, h = $('#dHome').value;
+      if (!a || !h) { toast('Pick the landing and fly-home dates'); break; }
+      if (l && l > a) { toast('Leaving must be on or before landing'); break; }
+      if (h < a) { toast('Fly-home must be after landing'); break; }
+      const days = daysBetween(parseDate(a), parseDate(h)) + 1;
+      if (days > 60) { toast('Trips up to 60 days are supported'); break; }
+      const f = fl();
+      const flights = { out: { ...f.out, depart: reDate(f.out.depart, l || a), arrive: reDate(f.out.arrive, a) }, back: { ...f.back, depart: reDate(f.back.depart, h) } };
+      if (flights.back.arrive && flights.back.arrive.slice(0, 10) < h) flights.back.arrive = reDate(flights.back.arrive, h);
+      closeSheet();
+      await store.saveSettings({ tripStart: a, tripDays: days, leaveDate: l || a, placeholderDates: false, flights });
+      toast('Dates saved — countdown updated'); } break;
     case 'saveFlights': {
       const out = readLeg('out'), backL = readLeg('back');
       if (out.depart && out.arrive && out.arrive.slice(0, 10) < out.depart.slice(0, 10)) { toast('Landing is before departure — check the dates'); break; }
       const patch = { flights: { out, back: backL } };
+      if (out.depart) patch.leaveDate = out.depart.slice(0, 10);
       const landDay = (out.arrive || out.depart || '').slice(0, 10);
       if (landDay) {
         patch.tripStart = landDay; patch.placeholderDates = false;
@@ -905,10 +945,7 @@ document.addEventListener('click', async ev => {
       const f = $('#itemForm').elements[el.dataset.k]; f.value = normUrl(u);
       const n = $('#itemForm').elements.name; if (n && !n.value) n.value = guessName(u); } break;
     case 'saveSettings': {
-      const start = $('#setStart').value, days = Math.max(1, Math.min(60, Number($('#setDays').value) || 21));
-      const patch = { tripDays: days, rate: Number($('#setRate').value) || S().rate, adireNames: $('#setNames').value.trim() };
-      if (start) { patch.placeholderDates = start === S().tripStart ? S().placeholderDates : false; patch.tripStart = start; }
-      await store.saveSettings(patch); toast('Saved'); } break;
+      await store.saveSettings({ rate: Number($('#setRate').value) || S().rate, adireNames: $('#setNames').value.trim() }); toast('Saved'); } break;
     case 'export': download(`lagos-planner-backup-${ymd(new Date())}.json`, JSON.stringify({ settings: S(), items: [...state.items.values()] }, null, 1), 'application/json'); break;
     case 'ics': exportICS(null); break;
     case 'saveCfg': { const c = parseConfig($('#cfgText').value); if (!c) { toast('That doesn’t look like a Firebase config'); break; }
@@ -945,6 +982,7 @@ document.addEventListener('submit', ev => {
 });
 document.addEventListener('input', ev => {
   if (ev.target.id === 'spotSearch') { state.q = ev.target.value; renderSpotList(); }
+  if (['dLeave', 'dLand', 'dHome'].includes(ev.target.id)) updateDateSummary();
   if (ev.target.name === 'link' && sheetItem?.kind === 'spot') { const n = $('#itemForm').elements.name; if (n && !n.value) n.value = guessName(ev.target.value); }
 });
 document.addEventListener('change', async ev => {
