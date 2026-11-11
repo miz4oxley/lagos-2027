@@ -1,11 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Only Moses and Adunni can read or write the trip plan.
-    // Replace the two emails with the ones you sign in with in the app.
+    // WellPlanned: only the two trip planners can read or write.
+    // To add Adunni, add her sign-in email to the list and publish in the Firebase console.
     match /trips/{tripId}/{document=**} {
       allow read, write: if request.auth != null
-        && request.auth.token.email in ['YOUR-EMAIL@example.com', 'ADUNNI-EMAIL@example.com'];
+        && request.auth.token.email.lower() in ['moses.akinde@gmail.com'];
     }
   }
 }
