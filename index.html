@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Lagos 2027 · Family Trip Planner</title>
+  <meta name="theme-color" content="#1d2b64">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Lagos 2027">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <div class="brand-title">Lagos 2027</div>
+        <div class="brand-sub" id="syncStatus">This phone only</div>
+      </div>
+    </div>
+    <button class="icon-btn" data-act="quick" aria-label="Quick add">＋</button>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button data-act="nav" data-view="home"><span class="ti">⌂</span>Home</button>
+    <button data-act="nav" data-view="spots"><span class="ti">✦</span>Spots</button>
+    <button data-act="nav" data-view="plan"><span class="ti">▦</span>Plan</button>
+    <button data-act="nav" data-view="todos"><span class="ti">✓</span>To-do</button>
+    <button data-act="nav" data-view="more"><span class="ti">≡</span>More</button>
+  </nav>
+
+  <div id="sheetWrap" class="sheet-wrap" hidden>
+    <div class="sheet-backdrop" data-act="close"></div>
+    <div class="sheet" role="dialog" aria-modal="true" id="sheet"></div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
