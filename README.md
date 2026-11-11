@@ -1,4 +1,6 @@
-# Lagos 2027 · Family Trip Planner
+# WellPlanned — Lagos 2027
+
+*Your forthcoming trip, well planned.*
 
 A personal phone app for planning our June 2027 family trip to Lagos. It has:
 

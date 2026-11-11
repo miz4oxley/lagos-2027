@@ -302,7 +302,7 @@ function viewHome() {
   const open = todos.filter(t => !t.done).sort((a, b) => (dueDate(a) || 9e15) - (dueDate(b) || 9e15));
   const vendors = items('vendor');
   const adire = items('guest').filter(g => g.adire && g.rsvp !== 'Not coming').reduce((n, g) => n + (Number(g.people) || 1), 0);
-  const heroTop = left > 0 ? `<div class="big">${left}</div><div class="lbl">days until we land in Lagos</div>` : left > -s.tripDays ? `<div class="big">Day ${-left + 1}</div><div class="lbl">We're in Lagos! 🇳🇬</div>` : `<div class="big">Ẹ kú àbọ̀</div><div class="lbl">Welcome home</div>`;
+  const heroTop = left > 0 ? `<div class="big">${left}</div><div class="lbl">days until we land in Lagos · Lagos 2027</div>` : left > -s.tripDays ? `<div class="big">Day ${-left + 1}</div><div class="lbl">We're in Lagos! 🇳🇬</div>` : `<div class="big">Ẹ kú àbọ̀</div><div class="lbl">Welcome home</div>`;
   return `
   <div class="hero">${heroTop}
     <div class="dates">${fmt(start, { month: 'long', day: 'numeric', year: 'numeric' })} → ${fmt(end, { month: 'long', day: 'numeric' })} · ${s.tripDays} days</div>
