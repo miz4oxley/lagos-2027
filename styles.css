@@ -143,3 +143,47 @@ table.sum td:last-child{text-align:right;font-variant-numeric:tabular-nums}
 code{background:var(--indigo-soft);padding:1px 5px;border-radius:5px;font-size:12px}
 
 @media (min-width:560px){.grid{grid-template-columns:repeat(3,1fr)}}
+
+/* flights in hero */
+.hero{cursor:pointer}
+.hero-edit{position:relative;z-index:1;margin-top:12px;border:0;border-radius:10px;padding:7px 12px;background:rgba(255,255,255,.16);color:#fff;font-weight:600;font-size:13px;cursor:pointer}
+.legs{position:relative;z-index:1;margin-top:12px;display:grid;gap:8px;font-size:14px}
+.leg{display:flex;gap:10px;align-items:flex-start;line-height:1.35}
+.leg>span{font-size:18px}
+.tz{opacity:.7;font-size:12px}
+.hero .linkbtn{background:rgba(255,255,255,.16);color:#fff}
+
+/* approvals & comments */
+.declined{opacity:.55}
+.appr{border-left:4px solid var(--gold)}
+.cmt{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin-top:6px;font-size:14px}
+.cmt.mine{background:var(--indigo-soft);border-color:#c9cfee}
+.cmt span{display:block;font-size:11px;color:var(--muted);margin-top:2px}
+.cmt-in{flex:1;min-width:0;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#fff;font-size:16px}
+
+/* itinerary */
+.itin-mode .tabbar button.on{color:var(--muted);font-weight:400}
+.itin-head{background:var(--indigo);color:#fff;border-radius:18px;padding:18px}
+.itin-head h2{color:#fff;margin:4px 0}
+.itin-head .small{opacity:.85}
+.itin-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.itin-day{background:var(--paper);border-radius:16px;box-shadow:var(--shadow);margin:12px 0;overflow:hidden;break-inside:avoid}
+.itin-dh{display:flex;gap:10px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}
+.itin-dh .t{font-weight:700}
+.itin-row{display:flex;gap:10px;padding:10px 14px;border-bottom:1px dashed var(--line)}
+.itin-row .time{width:72px;flex:none;font-size:13px;font-weight:700;color:var(--indigo-2)}
+.itin-row .t{font-weight:600}.itin-row .m{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.itin-day-act{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px}
+.print-only{display:none}
+
+@media print{
+  @page{margin:14mm}
+  body{background:#fff;padding:0}
+  .topbar,.tabbar,.no-print,.toast,.sheet-wrap{display:none!important}
+  .view{max-width:none;padding:0}
+  .itin-head{background:#fff;color:#000;border:2px solid #1d2b64}
+  .itin-head h2,.itin-head .small{color:#1d2b64;opacity:1}
+  .itin-day{box-shadow:none;border:1px solid #ccc}
+  .day-n{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .print-only{display:block}
+}

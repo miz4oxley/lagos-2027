@@ -55,6 +55,8 @@ const O = {
   rsvp: ['Not invited yet', 'Invited', 'Coming', 'Not coming'],
 };
 const ICON = { spot: '✦', todo: '✓', event: '▦', vendor: '☎', expense: '₦', cargo: '▣', guest: '☺' };
+const APPROVAL_KINDS = ['spot', 'event', 'vendor', 'expense', 'todo'];
+const LAGOS_TZ = 'Africa/Lagos';
 const CAT_ICON = { 'Adire & fabric': '◍', 'Fashion brand': '👗', Restaurant: '🍲', Shopping: '🛍', 'Beauty & hair': '💇🏾‍♀️', 'Kids fun': '🎈', 'Beach & outing': '🏖', Nightlife: '🌙', 'Culture & art': '🎨', Other: '✦' };
 
 /* ---------- forms (field specs) ---------- */
@@ -130,7 +132,8 @@ const DEFAULTS = {
 };
 
 /* ---------- starter plan (deterministic IDs so two phones never duplicate) ---------- */
-const DEFAULT_SETTINGS = { tripStart: '2027-06-14', tripDays: 21, rate: 1500, adireNames: 'Moses · Adunni · the girls', placeholderDates: true };
+const DEFAULT_SETTINGS = { tripStart: '2027-06-14', tripDays: 21, rate: 1500, adireNames: 'Moses · Adunni · the girls', placeholderDates: true,
+  members: ['Moses', 'Adunni'], homeTz: 'America/New_York', flights: { out: {}, back: {} } };
 function seeds() {
   const t = (id, title, weeksBefore, type = 'To-do', notes = '') => ({ id: 'seed-t-' + id, kind: 'todo', title, weeksBefore, type, who: 'Both', done: false, notes });
   const e = (id, day, time, title, type, notes = '') => ({ id: 'seed-e-' + id, kind: 'event', day, time, title, type, notes });
@@ -173,6 +176,49 @@ const S = () => state.settings;
 const items = kind => [...state.items.values()].filter(i => i.kind === kind);
 const dayDate = n => addDays(parseDate(S().tripStart), n - 1);
 const dueDate = t => t.due ? parseDate(t.due) : (t.weeksBefore != null && t.weeksBefore !== '' ? addDays(parseDate(S().tripStart), -7 * Number(t.weeksBefore)) : null);
+
+/* ---------- flights & time zones ---------- */
+const fl = () => ({ out: {}, back: {}, ...(S().flights || {}) });
+const splitDT = s => { if (!s) return null; const [d, t = ''] = s.split('T'); return { date: parseDate(d), day: d, time: t.slice(0, 5) }; };
+const fmtTime = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+const fmtDT = s => { const x = splitDT(s); return x ? `${fmt(x.date)} · ${fmtTime(x.time)}` : ''; };
+function zonedToUTC(dtStr, tz) {
+  const [d, t = '00:00'] = dtStr.split('T'); const [y, m, da] = d.split('-').map(Number); const [h, mi] = t.split(':').map(Number);
+  const guess = Date.UTC(y, m - 1, da, h, mi);
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .formatToParts(new Date(guess)).map(x => [x.type, x.value]));
+    const asTz = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute);
+    return new Date(guess - (asTz - guess));
+  } catch { return new Date(guess); }
+}
+const flightCode = f => String(f?.flightNo || '').replace(/\s+/g, '').toUpperCase();
+const trackLinks = f => { const c = flightCode(f); return c ? `<a class="linkbtn" href="https://www.flightradar24.com/data/flights/${c.toLowerCase()}" target="_blank" rel="noopener" data-stop>Track ${c} ↗</a> <a class="linkbtn" href="https://www.google.com/search?q=${c}+flight+status" target="_blank" rel="noopener" data-stop>Flight status ↗</a>` : ''; };
+
+/* ---------- people & approvals ---------- */
+const members = () => (S().members || ['Moses', 'Adunni']).filter(Boolean);
+const me = () => { const m = localStorage.getItem('me'); return members().includes(m) ? m : members()[0]; };
+const others = () => members().filter(n => n !== me()).join(' & ') || 'your partner';
+const shared = () => state.mode === 'cloud';
+const needsOk = it => shared() && APPROVAL_KINDS.includes(it.kind);
+function decision(it) {
+  if (!needsOk(it) || !it.votes) return 'Agreed';
+  if (members().some(n => it.votes[n] === 'no')) return 'Declined';
+  return members().every(n => it.votes[n] === 'yes') ? 'Agreed' : 'Proposed';
+}
+const live = it => decision(it) !== 'Declined';
+const needsMyOk = it => needsOk(it) && ((it.removeReq && it.removeReq.by !== me()) || (!it.removeReq && it.votes && decision(it) === 'Proposed' && !it.votes[me()]));
+const itemTitle = it => it.name || it.title || it.label || (it.role ? `${it.role}${it.name ? ': ' + it.name : ''}` : 'Item');
+function approvalPill(it) {
+  const c = (it.comments || []).length ? ` <span class="pill">💬 ${it.comments.length}</span>` : '';
+  if (!needsOk(it)) return c;
+  if (it.removeReq) return `<span class="pill red">${esc(it.removeReq.by)} wants to remove</span>` + c;
+  const d = decision(it);
+  if (d === 'Agreed') return (it.votes ? '<span class="pill green">✓ Agreed</span>' : '') + c;
+  if (d === 'Declined') return `<span class="pill grey">✗ Declined by ${esc(members().filter(n => it.votes[n] === 'no').join(', '))}</span>` + c;
+  return (needsMyOk(it) ? '<span class="pill gold">Needs your OK</span>' : `<span class="pill gold">Waiting for ${esc(members().filter(n => it.votes[n] !== 'yes').join(', '))}</span>`) + c;
+}
+const dcls = it => decision(it) === 'Declined' ? ' declined' : '';
 
 /* ---------- local storage (IndexedDB) ---------- */
 const idb = {
@@ -241,7 +287,8 @@ function startCloud() {
   }, err => toast('Sync error: ' + err.code)));
   cloud.unsub.push(fsM.onSnapshot(itemsCol(), snap => {
     state.items = new Map(snap.docs.map(d => [d.id, { ...d.data(), id: d.id }]));
-    state.ready = true; render();
+    const first = !state.ready; state.ready = true; render();
+    if (first && !members().includes(localStorage.getItem('me'))) askWho();
   }, err => toast('Sync error: ' + err.code + ' — check Firestore rules')));
   setSync(`Shared · ${cloud.user.email}`);
 }
@@ -275,6 +322,10 @@ async function startLocal() {
   setSync(getConfig() ? 'This phone only · tap More → Sharing to sign in' : 'This phone only');
   render();
 }
+function askWho() {
+  openSheet(`<h2>Who's using this phone?</h2><p class="sub">So the app knows whose ✓ Agree it is.</p>
+    <div class="kinds">${members().map(n => `<button class="kind" data-act="setMe" data-v="${esc(n)}"><b>${esc(n)}</b><span>This is my phone</span></button>`).join('')}</div>`);
+}
 function setSync(t) { $('#syncStatus').textContent = t; }
 
 /* ---------- UI ---------- */
@@ -290,30 +341,53 @@ function render() {
   if (!state.ready) return;
   document.querySelectorAll('.tabbar button').forEach(b => b.classList.toggle('on', b.dataset.view === state.view));
   const v = $('#view');
-  const fn = { home: viewHome, spots: viewSpots, plan: viewPlan, todos: viewTodos, more: viewMore }[state.view];
+  document.body.classList.toggle('itin-mode', state.view === 'itinerary');
+  const fn = { home: viewHome, spots: viewSpots, plan: viewPlan, todos: viewTodos, more: viewMore, itinerary: viewItinerary }[state.view];
   v.innerHTML = fn();
   if (state.view === 'spots') renderSpotList();
 }
 
 function viewHome() {
   const s = S(), start = parseDate(s.tripStart), end = dayDate(s.tripDays);
-  const left = daysBetween(today(), start);
-  const todos = items('todo');
+  const f = fl(), dep = splitDT(f.out.depart), arr = splitDT(f.out.arrive), ret = splitDT(f.back.depart);
+  const leftLand = daysBetween(today(), start);
+  const leftFly = dep ? daysBetween(today(), dep.date) : null;
+  const todos = items('todo').filter(live);
   const open = todos.filter(t => !t.done).sort((a, b) => (dueDate(a) || 9e15) - (dueDate(b) || 9e15));
-  const vendors = items('vendor');
+  const vendors = items('vendor').filter(live);
   const adire = items('guest').filter(g => g.adire && g.rsvp !== 'Not coming').reduce((n, g) => n + (Number(g.people) || 1), 0);
-  const heroTop = left > 0 ? `<div class="big">${left}</div><div class="lbl">days until we land in Lagos · Lagos 2027</div>` : left > -s.tripDays ? `<div class="big">Day ${-left + 1}</div><div class="lbl">We're in Lagos! 🇳🇬</div>` : `<div class="big">Ẹ kú àbọ̀</div><div class="lbl">Welcome home</div>`;
+  const pending = [...state.items.values()].filter(needsMyOk);
+  let heroTop;
+  if (leftFly != null && leftFly > 0) heroTop = `<div class="big">${leftFly}</div><div class="lbl">day${leftFly === 1 ? '' : 's'} until we fly to Lagos</div>`;
+  else if (leftFly === 0) heroTop = `<div class="big">Today ✈︎</div><div class="lbl">We fly to Lagos today!</div>`;
+  else if (leftLand > 0) heroTop = `<div class="big">${leftLand}</div><div class="lbl">days until we land in Lagos${dep ? '' : ' (estimate)'}</div>`;
+  else if (leftLand > -s.tripDays) heroTop = `<div class="big">Day ${-leftLand + 1}</div><div class="lbl">We're in Lagos! 🇳🇬</div>`;
+  else heroTop = `<div class="big">Ẹ kú àbọ̀</div><div class="lbl">Welcome home</div>`;
+  const legLine = (ic, label, x, tz, extra = '') => x ? `<div class="leg"><span>${ic}</span><div><b>${label}</b> ${extra}<br>${fmt(x.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTime(x.time) || 'time TBC'} <span class="tz">${tz}</span></div></div>` : '';
+  const flightsHTML = dep || arr ? `<div class="legs">
+      ${legLine('🛫', `Depart ${esc(f.out.from || 'US')}`, dep, 'US time', esc(f.out.flightNo || ''))}
+      ${legLine('🛬', `Land ${esc(f.out.to || 'Lagos')}`, arr, 'Lagos time')}
+      ${legLine('🏠', `Fly home ${esc(f.back.from || '')}`, ret, 'Lagos time', esc(f.back.flightNo || ''))}
+      <div style="margin-top:6px">${trackLinks(f.out)}</div></div>`
+    : `<div class="dates">${fmt(start, { month: 'long', day: 'numeric', year: 'numeric' })} → ${fmt(end, { month: 'long', day: 'numeric' })} · ${s.tripDays} days</div>`;
   return `
-  <div class="hero">${heroTop}
-    <div class="dates">${fmt(start, { month: 'long', day: 'numeric', year: 'numeric' })} → ${fmt(end, { month: 'long', day: 'numeric' })} · ${s.tripDays} days</div>
+  <div class="hero" data-act="flights">${heroTop}${flightsHTML}
+    <button class="hero-edit" data-act="flights">✎ ${dep ? 'Edit flights' : 'Add our flights'}</button>
   </div>
-  ${s.placeholderDates ? `<div class="notice">These are placeholder dates. Set your real dates in <a href="#" data-act="sub" data-sub="settings">Settings</a> — every deadline and day moves with them.</div>` : ''}
+  ${s.placeholderDates && !dep ? `<div class="notice">These are placeholder dates. Tap <b>Add our flights</b> once you book — every day and deadline moves with them.</div>` : ''}
+  ${pending.length ? `<h3>Needs your OK (${pending.length})</h3>${pending.map(it => `<div class="item" data-act="edit" data-id="${it.id}"><div class="thumb">${ICON[it.kind] || '•'}</div><div class="body">
+      <div class="t">${esc(itemTitle(it))}</div>
+      <div class="m">${it.removeReq ? `${esc(it.removeReq.by)} wants to remove this` : `${esc(it.editedBy || it.addedBy || '')} ${it.editedBy ? 'changed' : 'added'} this · ${esc(SPECS[it.kind].title)}`}</div>
+      <div class="row" style="margin-top:8px">${it.removeReq
+        ? `<button class="btn sm danger" data-act="rmYes" data-id="${it.id}">Remove</button><button class="btn sm" data-act="rmNo" data-id="${it.id}">Keep</button>`
+        : `<button class="btn sm" data-act="vote" data-v="yes" data-id="${it.id}">✓ Agree</button><button class="btn sm danger" data-act="vote" data-v="no" data-id="${it.id}">✗ Decline</button>`}</div></div></div>`).join('')}` : ''}
+  <button class="btn alt block" style="margin-top:12px" data-act="nav" data-view="itinerary">📖 See full itinerary</button>
   <div class="quick">
     <button class="btn gold" data-act="pasteSpot">📋 Paste a link</button>
     <button class="btn" data-act="add" data-kind="spot">✦ Save a spot</button>
   </div>
   <div class="stats">
-    <button class="stat" data-act="nav" data-view="spots"><b>${items('spot').length}</b><span>spots saved</span></button>
+    <button class="stat" data-act="nav" data-view="spots"><b>${items('spot').filter(live).length}</b><span>spots saved</span></button>
     <button class="stat" data-act="nav" data-view="todos"><b>${todos.filter(t => t.done).length}/${todos.length}</b><span>to-dos done</span></button>
     <button class="stat" data-act="sub" data-sub="vendors"><b>${vendors.filter(v => ['Booked', 'Paid'].includes(v.status)).length}/${vendors.length}</b><span>vendors booked</span></button>
     <button class="stat" data-act="sub" data-sub="guests"><b>${adire}</b><span>Adire outfits</span></button>
@@ -328,10 +402,11 @@ function viewHome() {
 function todoRow(t) {
   const d = dueDate(t); const late = d && !t.done && d < today();
   const when = d ? `${late ? '⚠︎ ' : ''}by ${fmt(d, { month: 'short', day: 'numeric', year: d.getFullYear() !== today().getFullYear() ? 'numeric' : undefined })}` : 'no date';
-  return `<div class="item ${t.done ? 'done' : ''}" data-act="edit" data-id="${t.id}">
+  return `<div class="item ${t.done ? 'done' : ''}${dcls(t)}" data-act="edit" data-id="${t.id}">
     <button class="check ${t.done ? 'on' : ''}" data-act="toggle" data-id="${t.id}" aria-label="Mark done">${t.done ? '✓' : ''}</button>
     <div class="body"><div class="t">${esc(t.title)}</div>
     <div class="m">${late ? `<span class="pill red">${when}</span>` : esc(when)} · ${esc(t.type)} · ${esc(t.who)}</div>
+    ${approvalPill(t) ? `<div class="m">${approvalPill(t)}</div>` : ''}
     ${t.link ? linkBtn(t.link) : ''}</div></div>`;
 }
 
@@ -350,11 +425,11 @@ function renderSpotList() {
     (!q || [s.name, s.notes, s.area, s.category, s.link].join(' ').toLowerCase().includes(q)))
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   $('#spotList').innerHTML = list.length ? `<div class="grid">${list.map(s => `
-    <div class="spot" data-act="edit" data-id="${s.id}">
+    <div class="spot${dcls(s)}" data-act="edit" data-id="${s.id}">
       <div class="img" ${s.image ? `style="background-image:url('${s.image}')"` : ''}>${s.image ? '' : (CAT_ICON[s.category] || '✦')}</div>
       <div class="info"><div class="t">${esc(s.name)}</div>
       <div class="m">${esc(s.area || '')}${s.day ? ` · Day ${s.day}` : ''}</div>
-      <div style="margin-top:6px">${pillFor(s.status)}</div>
+      <div style="margin-top:6px">${pillFor(s.status)} ${approvalPill(s)}</div>
       ${linkBtn(s.link)}</div></div>`).join('')}</div>`
     : `<div class="card muted">No spots yet. When you see a store or place on Instagram, copy the link and tap <b>Paste a link</b>.</div>`;
 }
@@ -364,16 +439,17 @@ function viewPlan() {
   const evs = items('event'), spots = items('spot').filter(x => x.day);
   const unsched = items('spot').filter(x => !x.day && x.status !== 'Visited').length;
   let html = `<h2>Day-by-day plan</h2><p class="sub">${fmt(dayDate(1), { month: 'long', day: 'numeric' })} – ${fmt(dayDate(s.tripDays), { month: 'long', day: 'numeric', year: 'numeric' })}</p>
-  <div class="row wrap"><button class="btn sm" data-act="add" data-kind="event">＋ Add to plan</button><button class="btn sm alt" data-act="ics">📅 Add to phone calendar</button></div>
+  <div class="row wrap"><button class="btn sm" data-act="add" data-kind="event">＋ Add to plan</button><button class="btn sm gold" data-act="nav" data-view="itinerary">📖 See full itinerary</button><button class="btn sm alt" data-act="ics">📅 Add to calendar</button></div>
   ${unsched ? `<div class="notice blue">${unsched} saved spot${unsched > 1 ? 's are' : ' is'} not on a day yet. Open a spot and choose “Which day?”.</div>` : ''}`;
   for (let d = 1; d <= s.tripDays; d++) {
-    const dayEv = evs.filter(e => Number(e.day) === d).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
+    const dayEv = evs.filter(e => Number(e.day) === d && !(e.id === 'seed-e-fly' && fl().back.depart)).sort((a, b) => (a.time || '99').localeCompare(b.time || '99'));
     const daySp = spots.filter(x => Number(x.day) === d);
     html += `<div class="day"><div class="day-h"><div class="day-n">${d}</div><div><div class="t">${fmt(dayDate(d), { weekday: 'long', month: 'short', day: 'numeric' })}</div>
       <div class="m">${dayEv.length + daySp.length ? `${dayEv.length + daySp.length} planned` : 'Free day'}</div></div></div>
-      ${dayEv.map(e => { const v = e.vendorId && state.items.get(e.vendorId); return `<div class="ev" data-act="edit" data-id="${e.id}"><div class="time">${esc(e.time || '—')}</div>
-        <div class="body"><div class="t">${esc(e.title)}</div><div class="m">${esc(e.type || '')}${e.place ? ' · ' + esc(e.place) : ''}${v ? ' · ' + esc(v.name || v.role) : ''}</div>${linkBtn(e.link)}</div></div>`; }).join('')}
-      ${daySp.map(x => `<div class="ev" data-act="edit" data-id="${x.id}"><div class="time">✦</div><div class="body"><div class="t">${esc(x.name)}</div><div class="m">${esc(x.category)} · ${esc(x.area || '')}</div>${linkBtn(x.link)}</div></div>`).join('')}
+      ${flightRows(d).map(r => `<div class="ev" data-act="flights"><div class="time">${esc(fmtTime(r.time) || '✈︎')}</div><div class="body"><div class="t">${esc(r.title)}</div><div class="m">${esc(r.sub || '')}</div></div></div>`).join('')}
+      ${dayEv.map(e => { const v = e.vendorId && state.items.get(e.vendorId); return `<div class="ev${dcls(e)}" data-act="edit" data-id="${e.id}"><div class="time">${esc(fmtTime(e.time) || '—')}</div>
+        <div class="body"><div class="t">${esc(e.title)}</div><div class="m">${esc(e.type || '')}${e.place ? ' · ' + esc(e.place) : ''}${v ? ' · ' + esc(v.name || v.role) : ''}</div>${approvalPill(e) ? `<div class="m">${approvalPill(e)}</div>` : ''}${linkBtn(e.link)}</div></div>`; }).join('')}
+      ${daySp.map(x => `<div class="ev${dcls(x)}" data-act="edit" data-id="${x.id}"><div class="time">✦</div><div class="body"><div class="t">${esc(x.name)}</div><div class="m">${esc(x.category)} · ${esc(x.area || '')}</div>${approvalPill(x) ? `<div class="m">${approvalPill(x)}</div>` : ''}${linkBtn(x.link)}</div></div>`).join('')}
       <div class="add-row"><button class="btn sm alt" data-act="add" data-kind="event" data-day="${d}">＋ Add</button></div></div>`;
   }
   return html;
@@ -410,15 +486,15 @@ function viewVendors() {
   const list = items('vendor').sort((a, b) => O.vendorRole.indexOf(a.role) - O.vendorRole.indexOf(b.role));
   return `${back('Vendors & contacts')}<p class="sub">Everyone we need in Lagos. Tap to add their number — WhatsApp opens straight from here.</p>
   <button class="btn block" data-act="add" data-kind="vendor">＋ Add vendor</button>
-  ${list.map(v => `<div class="item" data-act="edit" data-id="${v.id}"><div class="thumb">${ICON.vendor}</div><div class="body">
+  ${list.map(v => `<div class="item${dcls(v)}" data-act="edit" data-id="${v.id}"><div class="thumb">${ICON.vendor}</div><div class="body">
     <div class="t">${esc(v.name || 'To find')} <span class="muted small">· ${esc(v.role)}</span></div>
-    <div class="m">${pillFor(v.status)} ${v.quote ? ' ' + money(v.quote, v.currency) : ''}</div>
+    <div class="m">${pillFor(v.status)} ${v.quote ? ' ' + money(v.quote, v.currency) : ''} ${approvalPill(v)}</div>
     <div>${waBtn(v.phone)} ${linkBtn(v.link)}</div></div></div>`).join('')}`;
 }
 
 function budgetTotals() {
   const r = Number(S().rate) || 1;
-  const ex = items('expense');
+  const ex = items('expense').filter(live);
   const usd = ex.reduce((n, e) => n + (e.currency === 'NGN' ? Number(e.amount || 0) / r : Number(e.amount || 0)), 0);
   const paid = ex.filter(e => e.paid).reduce((n, e) => n + (e.currency === 'NGN' ? Number(e.amount || 0) / r : Number(e.amount || 0)), 0);
   return { usd, paid, r, ex };
@@ -434,7 +510,7 @@ function viewBudget() {
     ${byCat.map(([c, v]) => `<tr><td class="muted">${esc(c)}</td><td>${money(v, 'USD')}</td></tr>`).join('')}
   </table></div>
   <button class="btn block" data-act="add" data-kind="expense">＋ Add cost</button>
-  ${ex.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(e => `<div class="item" data-act="edit" data-id="${e.id}"><div class="body"><div class="t">${esc(e.title)}</div><div class="m">${esc(e.category)} ${e.paid ? '<span class="pill green">Paid</span>' : ''}</div></div><div class="right"><b>${money(e.amount, e.currency)}</b></div></div>`).join('')}`;
+  ${items('expense').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(e => `<div class="item${dcls(e)}" data-act="edit" data-id="${e.id}"><div class="body"><div class="t">${esc(e.title)}</div><div class="m">${esc(e.category)} ${e.paid ? '<span class="pill green">Paid</span>' : ''} ${approvalPill(e)}</div></div><div class="right"><b>${money(e.amount, e.currency)}</b></div></div>`).join('')}`;
 }
 
 function viewCargo() {
@@ -469,13 +545,23 @@ function viewSettings() {
   const signed = state.mode === 'cloud';
   return `${back('Settings')}
   <div class="card">
+    <button class="btn gold block" data-act="flights">✈︎ ${splitDT(fl().out.depart) ? 'Edit our flights' : 'Add our flights'}</button>
+    <p class="small muted">Adding flights sets the landing date and trip length automatically.</p>
     <div class="two"><div class="field"><label>Landing date</label><input type="date" id="setStart" value="${esc(s.tripStart)}"></div>
     <div class="field"><label>Trip length (days)</label><input type="number" id="setDays" min="1" max="60" value="${esc(s.tripDays)}"></div></div>
     <div class="field"><label>Naira per $1 (your rate)</label><input type="number" id="setRate" value="${esc(s.rate)}"></div>
     <div class="field"><label>Names on our Adire</label><input type="text" id="setNames" value="${esc(s.adireNames)}"></div>
     <button class="btn block" data-act="saveSettings">Save settings</button>
   </div>
-  <h3>Share with Adunni</h3>
+  <h3>Who's deciding</h3>
+  <div class="card">
+    <p class="small muted">When sharing is on, anything one of you adds or changes waits for the other's ✓ Agree.</p>
+    <div class="two"><div class="field"><label>Planner 1</label><input type="text" id="setM1" value="${esc(members()[0] || '')}"></div>
+    <div class="field"><label>Planner 2</label><input type="text" id="setM2" value="${esc(members()[1] || '')}"></div></div>
+    <div class="field"><label>This phone belongs to</label><select id="setMe">${members().map(n => `<option ${n === me() ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
+    <button class="btn block" data-act="saveMembers">Save</button>
+  </div>
+  <h3>Share with ${esc(others())}</h3>
   <div class="card">
     ${signed ? `<p>✅ Signed in as <b>${esc(cloud.user.email)}</b>. Everything you add shows up on both phones.</p>
       <button class="btn alt block" data-act="pushLocal">Copy this phone's offline plan into the shared plan</button><div style="height:8px"></div>
@@ -527,7 +613,8 @@ function openForm(kind, item = null, prefill = {}) {
   sheetItem = item ? { ...item } : { id: uid(), kind, ...DEFAULTS[kind], ...prefill, _new: true };
   const v = sheetItem;
   const fields = spec.fields.map(f => Array.isArray(f) ? `<div class="two">${f.map(x => fieldHTML(x, v)).join('')}</div>` : fieldHTML(f, v)).join('');
-  openSheet(`<h2>${v._new ? 'New' : 'Edit'} ${spec.title.toLowerCase()}</h2><form id="itemForm">${fields}
+  openSheet(`<h2>${v._new ? 'New' : 'Edit'} ${spec.title.toLowerCase()}</h2>${approvalPanel(v)}<form id="itemForm">${fields}
+    ${v._new && needsOk(v) ? `<p class="small muted">${esc(others())} will be asked to agree.</p>` : ''}
     <div class="sheet-actions">${v._new ? '' : '<button type="button" class="btn danger" data-act="delete">Delete</button>'}
     <button type="button" class="btn alt" data-act="close">Cancel</button><button type="submit" class="btn">Save</button></div></form>`);
 }
@@ -547,6 +634,142 @@ function collectForm() {
   if (out.link) out.link = normUrl(out.link);
   if (kind === 'spot' && out.day && out.status === 'Want to go') out.status = 'Planned';
   return out;
+}
+
+const cmtHTML = cs => cs.length ? cs.map(c => `<div class="cmt ${c.by === me() ? 'mine' : ''}"><b>${esc(c.by)}</b> ${esc(c.text)}<span>${new Date(c.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span></div>`).join('') : '<div class="small muted" style="margin-top:6px">No notes yet.</div>';
+function approvalPanel(it) {
+  if (it._new) return '';
+  let h = '';
+  if (needsOk(it) && (it.votes || it.removeReq)) {
+    const mine = (it.votes || {})[me()];
+    h += `<div class="card appr"><div class="small muted">Added by ${esc(it.addedBy || '—')}${it.editedBy ? ` · last changed by ${esc(it.editedBy)}` : ''}</div>
+      <div class="row wrap" style="margin:8px 0">${members().map(n => { const x = (it.votes || {})[n]; return `<span class="pill ${x === 'yes' ? 'green' : x === 'no' ? 'red' : 'gold'}">${esc(n)}: ${x === 'yes' ? '✓ agreed' : x === 'no' ? '✗ declined' : 'waiting'}</span>`; }).join('')}</div>
+      ${it.removeReq ? `<div class="notice">${esc(it.removeReq.by)} wants to remove this.</div>${it.removeReq.by !== me()
+        ? `<div class="row"><button class="btn danger" style="flex:1" data-act="rmYes" data-id="${it.id}">Remove it</button><button class="btn" style="flex:1" data-act="rmNo" data-id="${it.id}">Keep it</button></div>`
+        : `<button class="btn alt block" data-act="rmNo" data-id="${it.id}">Cancel my request</button>`}`
+      : it.votes ? `<div class="row">${mine !== 'yes' ? `<button class="btn" style="flex:1" data-act="vote" data-v="yes" data-id="${it.id}">✓ Agree</button>` : ''}${mine !== 'no' ? `<button class="btn danger" style="flex:1" data-act="vote" data-v="no" data-id="${it.id}">✗ ${mine === 'yes' ? 'Change to decline' : 'Decline'}</button>` : ''}</div>` : ''}
+    </div>`;
+  }
+  h += `<div class="card"><b class="small">💬 Talk it over</b><div id="cmtList">${cmtHTML(it.comments || [])}</div>
+    <div class="row" style="margin-top:8px"><input type="text" id="cmtText" class="cmt-in" placeholder="Note to ${esc(others())}…"><button type="button" class="btn sm" data-act="comment">Send</button></div></div>`;
+  return h;
+}
+
+/* ---------- flights sheet ---------- */
+function openFlights() {
+  const f = fl();
+  const leg = (k, label, fromTz, toTz, l) => `<h3>${label}</h3>
+    <div class="two"><div class="field"><label>Flight number</label><input type="text" id="${k}_flightNo" value="${esc(l.flightNo || '')}" placeholder="e.g. DL 54" autocapitalize="characters"></div>
+    <div class="field"><label>Airline</label><input type="text" id="${k}_airline" value="${esc(l.airline || '')}" placeholder="e.g. Delta"></div></div>
+    <div class="two"><div class="field"><label>From (airport)</label><input type="text" id="${k}_from" value="${esc(l.from || '')}" placeholder="${k === 'out' ? 'ATL' : 'LOS'}"></div>
+    <div class="field"><label>To (airport)</label><input type="text" id="${k}_to" value="${esc(l.to || '')}" placeholder="${k === 'out' ? 'LOS' : 'ATL'}"></div></div>
+    <div class="field"><label>Departs (${fromTz})</label><input type="datetime-local" id="${k}_depart" value="${esc(l.depart || '')}"></div>
+    <div class="field"><label>Arrives (${toTz})</label><input type="datetime-local" id="${k}_arrive" value="${esc(l.arrive || '')}"></div>
+    <div class="field"><label>Connections / layovers</label><input type="text" id="${k}_via" value="${esc(l.via || '')}" placeholder="e.g. via Amsterdam, 2h layover"></div>
+    <div class="field"><label>Booking / confirmation code</label><input type="text" id="${k}_conf" value="${esc(l.conf || '')}"></div>
+    <div class="row wrap">${trackLinks(l)}${flightCode(l) ? ` <button type="button" class="linkbtn" style="border:0" data-act="shareFlight" data-k="${k}">💬 Send to Messages</button>` : ''}</div>`;
+  openSheet(`<h2>Our flights</h2><p class="sub">Times are local: US time when leaving the US, Lagos time when landing. Saving updates the countdown, Day 1 and trip length.</p>
+    ${leg('out', '🛫 Going to Lagos', 'US time', 'Lagos time', f.out)}
+    ${leg('back', '🏠 Coming home', 'Lagos time', 'US time', f.back)}
+    <div class="sheet-actions"><button type="button" class="btn alt" data-act="close">Cancel</button><button type="button" class="btn" data-act="saveFlights">Save flights</button></div>`);
+}
+function readLeg(k) { const g = n => ($(`#${k}_${n}`)?.value || '').trim(); return { flightNo: g('flightNo').toUpperCase(), airline: g('airline'), from: g('from').toUpperCase(), to: g('to').toUpperCase(), depart: g('depart'), arrive: g('arrive'), via: g('via'), conf: g('conf') }; }
+function flightRows(d) {
+  const f = fl(), date = ymd(dayDate(d)), rows = [];
+  const dep = splitDT(f.out.depart), arr = splitDT(f.out.arrive), bd = splitDT(f.back.depart), ba = splitDT(f.back.arrive);
+  if (arr && arr.day === date) {
+    if (dep) rows.push({ sort: '00:00', time: '', title: `🛫 Left ${f.out.from || 'the US'} ${fmt(dep.date)} at ${fmtTime(dep.time)} (US time)`, sub: [f.out.airline, f.out.flightNo, f.out.via].filter(Boolean).join(' · ') });
+    rows.push({ sort: arr.time || '00:01', time: arr.time, title: `🛬 Land in Lagos${f.out.to ? ' (' + f.out.to + ')' : ''}`, sub: [f.out.flightNo, f.out.conf && 'Booking ' + f.out.conf].filter(Boolean).join(' · ') });
+  }
+  if (bd && bd.day === date) rows.push({ sort: bd.time || '23:58', time: bd.time, title: `🏠 Fly home${f.back.from ? ' from ' + f.back.from : ''}`, sub: [f.back.airline, f.back.flightNo, f.back.via, ba && `lands ${fmtDT(f.back.arrive)} US time`].filter(Boolean).join(' · ') });
+  return rows;
+}
+
+/* ---------- full itinerary ---------- */
+function dayRows(d) {
+  const rows = flightRows(d).map(r => ({ ...r, kind: 'flight' }));
+  items('event').filter(e => Number(e.day) === d && live(e) && !(e.id === 'seed-e-fly' && fl().back.depart)).forEach(e => {
+    const v = e.vendorId && state.items.get(e.vendorId);
+    rows.push({ sort: e.time || '99', time: e.time, title: e.title, sub: [e.type, e.place, v && `${v.name || v.role}${v.phone ? ' ' + v.phone : ''}`].filter(Boolean).join(' · '), notes: e.notes, link: e.link, pending: decision(e) === 'Proposed' });
+  });
+  items('spot').filter(x => Number(x.day) === d && live(x)).forEach(x => rows.push({ sort: '98', time: '', title: '✦ ' + x.name, sub: [x.category, x.area].filter(Boolean).join(' · '), notes: x.notes, link: x.link, pending: decision(x) === 'Proposed' }));
+  return rows.sort((a, b) => a.sort.localeCompare(b.sort));
+}
+const dayLabel = d => `Day ${d} · ${fmt(dayDate(d), { weekday: 'long', month: 'long', day: 'numeric' })}`;
+function dayText(d) {
+  const rows = dayRows(d);
+  return `${dayLabel(d)}\n` + (rows.length ? rows.map(r => `${r.time ? fmtTime(r.time) : '•'}  ${r.title}${r.pending ? ' (not agreed yet)' : ''}${r.sub ? `\n    ${r.sub}` : ''}${r.notes ? `\n    ${r.notes}` : ''}${r.link ? `\n    ${r.link}` : ''}`).join('\n') : 'Free day');
+}
+function tripText() {
+  const s = S();
+  return `WellPlanned · Lagos 2027\n${fmt(dayDate(1), { month: 'long', day: 'numeric' })} – ${fmt(dayDate(s.tripDays), { month: 'long', day: 'numeric', year: 'numeric' })}\n\n` +
+    Array.from({ length: s.tripDays }, (_, i) => dayText(i + 1)).join('\n\n');
+}
+function viewItinerary() {
+  const s = S(), f = fl();
+  let h = `<div class="no-print row wrap" style="margin-bottom:8px"><button class="btn sm alt" data-act="nav" data-view="plan">‹ Plan</button></div>
+  <div class="itin-head"><div class="small">WellPlanned · Lagos 2027</div><h2>Our itinerary</h2>
+    <div>${fmt(dayDate(1), { month: 'long', day: 'numeric' })} – ${fmt(dayDate(s.tripDays), { month: 'long', day: 'numeric', year: 'numeric' })} · ${s.tripDays} days</div>
+    ${f.out.depart ? `<div class="small" style="margin-top:6px">🛫 ${esc(f.out.flightNo || '')} departs ${esc(f.out.from || '')} ${esc(fmtDT(f.out.depart))} (US) · 🛬 lands ${esc(fmtDT(f.out.arrive))} (Lagos)</div>` : ''}
+    ${f.back.depart ? `<div class="small">🏠 ${esc(f.back.flightNo || '')} departs ${esc(fmtDT(f.back.depart))} (Lagos)${f.back.arrive ? ` · lands ${esc(fmtDT(f.back.arrive))} (US)` : ''}</div>` : ''}
+  </div>
+  <div class="no-print itin-actions">
+    <button class="btn sm" data-act="print">📄 Save as PDF / print</button>
+    <button class="btn sm alt" data-act="ics">📅 Whole trip to calendar</button>
+    <button class="btn sm alt" data-act="shareTrip">💬 Share as text</button>
+  </div>`;
+  for (let d = 1; d <= s.tripDays; d++) {
+    const rows = dayRows(d);
+    h += `<section class="itin-day"><div class="itin-dh"><div class="day-n">${d}</div><div class="t">${esc(fmt(dayDate(d), { weekday: 'long', month: 'long', day: 'numeric' }))}</div></div>
+      ${rows.length ? rows.map(r => `<div class="itin-row"><div class="time">${esc(fmtTime(r.time) || '')}</div><div><div class="t">${esc(r.title)}${r.pending ? ' <span class="pill gold">not agreed yet</span>' : ''}</div>
+        ${r.sub ? `<div class="m">${esc(r.sub)}</div>` : ''}${r.notes ? `<div class="m">${esc(r.notes)}</div>` : ''}${r.link ? `<div class="m print-only">${esc(r.link)}</div><div class="no-print">${linkBtn(r.link)}</div>` : ''}</div></div>`).join('') : '<div class="empty">Free day</div>'}
+      <div class="no-print itin-day-act"><button class="btn sm alt" data-act="icsDay" data-day="${d}">📅 Calendar</button><button class="btn sm alt" data-act="picDay" data-day="${d}">🖼 Picture</button><button class="btn sm alt" data-act="shareDay" data-day="${d}">💬 Text</button></div>
+    </section>`;
+  }
+  return h;
+}
+async function shareText(text, title) {
+  if (navigator.share) { try { await navigator.share({ title, text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(text); toast('Copied — paste it into a message'); } catch { download('itinerary.txt', text, 'text/plain'); }
+}
+function wrapLines(ctx, text, maxW) {
+  const out = [];
+  String(text).split('\n').forEach(par => {
+    let line = '';
+    par.split(' ').forEach(w => { const t = line ? line + ' ' + w : w; if (ctx.measureText(t).width > maxW && line) { out.push(line); line = w; } else line = t; });
+    out.push(line);
+  });
+  return out;
+}
+async function dayPicture(d) {
+  const W = 1080, pad = 72, rows = dayRows(d);
+  const c = document.createElement('canvas'); c.width = W; c.height = 4000; const x = c.getContext('2d');
+  const sans = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif', serif = 'Georgia, "Times New Roman", serif';
+  x.fillStyle = '#faf6ef'; x.fillRect(0, 0, W, c.height);
+  x.fillStyle = '#1d2b64'; x.fillRect(0, 0, W, 330);
+  x.fillStyle = 'rgba(255,255,255,.12)';
+  for (let i = 0; i < W; i += 36) for (let j = 0; j < 330; j += 36) { x.beginPath(); x.arc(i + 18, j + 18, 4, 0, 7); x.fill(); }
+  x.fillStyle = '#e0a526'; x.font = `600 34px ${sans}`; x.fillText('WellPlanned · Lagos 2027', pad, 100);
+  x.fillStyle = '#fff'; x.font = `700 96px ${serif}`; x.fillText(`Day ${d}`, pad, 205);
+  x.font = `500 42px ${sans}`; x.fillText(fmt(dayDate(d), { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }), pad, 275);
+  let y = 410; const tx = pad + 200, tw = W - tx - pad;
+  if (!rows.length) { x.fillStyle = '#6b6f80'; x.font = `500 44px ${sans}`; x.fillText('Free day — rest & enjoy 🇳🇬', pad, y); y += 60; }
+  rows.forEach(r => {
+    x.fillStyle = '#2f4296'; x.font = `700 36px ${sans}`; x.fillText(r.time ? fmtTime(r.time) : '•', pad, y);
+    x.fillStyle = '#1a1d2b'; x.font = `650 42px ${sans}`;
+    wrapLines(x, r.title + (r.pending ? ' (not agreed yet)' : ''), tw).forEach(l => { x.fillText(l, tx, y); y += 54; });
+    x.fillStyle = '#6b6f80'; x.font = `400 32px ${sans}`;
+    [r.sub, r.notes].filter(Boolean).forEach(t => wrapLines(x, t, tw).forEach(l => { x.fillText(l, tx, y); y += 44; }));
+    y += 18; x.fillStyle = '#e6e1d6'; x.fillRect(pad, y - 10, W - pad * 2, 2); y += 46;
+  });
+  y += 20;
+  const out = document.createElement('canvas'); out.width = W; out.height = Math.max(y, 900);
+  out.getContext('2d').drawImage(c, 0, 0);
+  const blob = await new Promise(r => out.toBlob(r, 'image/png'));
+  const file = new File([blob], `lagos-2027-day-${d}.png`, { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: dayLabel(d) }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+  toast('Picture saved');
 }
 
 async function compressImage(file, max = 900, q = 0.72) {
@@ -583,23 +806,35 @@ function download(name, text, type) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
-function exportICS() {
-  const s = S(); const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Lagos2027//Planner//EN', 'CALSCALE:GREGORIAN'];
+function exportICS(onlyDay = null) {
+  const s = S(), f = fl(), homeTz = s.homeTz || 'America/New_York';
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//WellPlanned//Lagos2027//EN', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Lagos 2027'];
   const e = t => String(t || '').replace(/[\\,;]/g, m => '\\' + m).replace(/\n/g, '\\n');
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  const z = d => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   const d8 = d => ymd(d).replace(/-/g, '');
-  const push = (id, title, date, time, desc) => {
-    lines.push('BEGIN:VEVENT', `UID:${id}@lagos2027`, `DTSTAMP:${stamp}`);
-    if (time) { const [h, m] = time.split(':'); lines.push(`DTSTART:${d8(date)}T${h}${m}00`, `DURATION:PT1H`); }
-    else lines.push(`DTSTART;VALUE=DATE:${d8(date)}`, `DTEND;VALUE=DATE:${d8(addDays(date, 1))}`);
-    lines.push(`SUMMARY:${e(title)}`); if (desc) lines.push(`DESCRIPTION:${e(desc)}`); lines.push('END:VEVENT');
+  const stamp = z(new Date());
+  const ev = (id, title, start, end, desc, loc) => {
+    lines.push('BEGIN:VEVENT', `UID:${id}@wellplanned`, `DTSTAMP:${stamp}`);
+    if (start instanceof Date) lines.push(`DTSTART:${z(start)}`, `DTEND:${z(end || new Date(+start + 3600e3))}`);
+    else lines.push(`DTSTART;VALUE=DATE:${d8(start.date)}`, `DTEND;VALUE=DATE:${d8(addDays(start.date, 1))}`);
+    lines.push(`SUMMARY:${e(title)}`); if (loc) lines.push(`LOCATION:${e(loc)}`); if (desc) lines.push(`DESCRIPTION:${e(desc)}`); lines.push('END:VEVENT');
   };
-  items('event').forEach(x => x.day && push(x.id, '🇳🇬 ' + x.title, dayDate(Number(x.day)), x.time, [x.place, x.link, x.notes].filter(Boolean).join('\n')));
-  items('spot').filter(x => x.day).forEach(x => push(x.id, '✦ ' + x.name, dayDate(Number(x.day)), '', [x.link, x.notes].filter(Boolean).join('\n')));
-  items('todo').filter(t => !t.done && dueDate(t)).forEach(t => push(t.id, '✓ Lagos: ' + t.title, dueDate(t), '', t.notes));
+  const inDay = date => onlyDay == null || ymd(date) === ymd(dayDate(onlyDay));
+  const lagosAt = (d, time) => zonedToUTC(`${ymd(dayDate(d))}T${time}`, LAGOS_TZ);
+  // flights (real time zones, so they show correctly on any phone)
+  if (f.out.depart && f.out.arrive && (onlyDay == null || inDay(splitDT(f.out.arrive).date)))
+    ev('flight-out', `✈︎ ${f.out.flightNo || 'Flight'} ${f.out.from || ''} → ${f.out.to || 'LOS'}`.trim(), zonedToUTC(f.out.depart, homeTz), zonedToUTC(f.out.arrive, LAGOS_TZ), [f.out.airline, f.out.via, f.out.conf && 'Booking ' + f.out.conf].filter(Boolean).join('\n'));
+  if (f.back.depart && (onlyDay == null || inDay(splitDT(f.back.depart).date)))
+    ev('flight-back', `✈︎ ${f.back.flightNo || 'Flight'} home ${f.back.from || 'LOS'} → ${f.back.to || ''}`.trim(), zonedToUTC(f.back.depart, LAGOS_TZ), f.back.arrive ? zonedToUTC(f.back.arrive, homeTz) : null, [f.back.airline, f.back.via, f.back.conf && 'Booking ' + f.back.conf].filter(Boolean).join('\n'));
+  items('event').filter(x => x.day && live(x) && (onlyDay == null || Number(x.day) === onlyDay)).forEach(x => {
+    const desc = [x.link, x.notes].filter(Boolean).join('\n');
+    if (x.time) ev(x.id, '🇳🇬 ' + x.title, lagosAt(Number(x.day), x.time), null, desc, x.place); else ev(x.id, '🇳🇬 ' + x.title, { date: dayDate(Number(x.day)) }, null, desc, x.place);
+  });
+  items('spot').filter(x => x.day && live(x) && (onlyDay == null || Number(x.day) === onlyDay)).forEach(x => ev(x.id, '✦ ' + x.name, { date: dayDate(Number(x.day)) }, null, [x.link, x.notes].filter(Boolean).join('\n'), x.area));
+  if (onlyDay == null) items('todo').filter(t => !t.done && live(t) && dueDate(t)).forEach(t => ev(t.id, '✓ Lagos: ' + t.title, { date: dueDate(t) }, null, t.notes));
   lines.push('END:VCALENDAR');
-  download('lagos-2027.ics', lines.join('\r\n'), 'text/calendar');
-  toast(`Calendar file ready${s.placeholderDates ? ' — dates are still placeholders' : ''}`);
+  download(onlyDay == null ? 'lagos-2027.ics' : `lagos-2027-day-${onlyDay}.ics`, lines.join('\r\n'), 'text/calendar');
+  toast(`Calendar file ready — open it to add${s.placeholderDates && !f.out.depart ? ' (dates are still placeholders)' : ''}`);
 }
 function parseConfig(txt) {
   const m = txt.match(/\{[\s\S]*\}/); if (!m) return null;
@@ -621,7 +856,47 @@ document.addEventListener('click', async ev => {
     case 'add': ev.stopPropagation(); { const pre = el.dataset.day ? { day: Number(el.dataset.day) } : {}; openForm(el.dataset.kind, null, pre); } break;
     case 'edit': { const it = state.items.get(el.dataset.id); if (it) openForm(it.kind, it); } break;
     case 'toggle': ev.stopPropagation(); { const it = state.items.get(el.dataset.id); if (it) store.save({ ...it, done: !it.done }); } break;
-    case 'delete': if (confirm('Delete this?')) { const id = sheetItem.id; closeSheet(); store.remove(id); toast('Deleted'); } break;
+    case 'delete': {
+      const it = state.items.get(sheetItem.id) || sheetItem;
+      if (needsOk(it) && it.votes && decision(it) === 'Agreed') {
+        if (confirm(`You both agreed on this. Ask ${others()} to confirm removing it?`)) { closeSheet(); store.save({ ...it, removeReq: { by: me(), at: Date.now() } }); toast(`Sent to ${others()} to confirm`); }
+      } else if (confirm('Delete this?')) { closeSheet(); store.remove(it.id); toast('Deleted'); }
+    } break;
+    case 'vote': { const it = state.items.get(el.dataset.id); if (!it) break; closeSheet();
+      await store.save({ ...it, votes: { ...(it.votes || {}), [me()]: el.dataset.v } }); toast(el.dataset.v === 'yes' ? '✓ Agreed' : 'Declined'); } break;
+    case 'rmYes': { closeSheet(); await store.remove(el.dataset.id); toast('Removed'); } break;
+    case 'rmNo': { const it = state.items.get(el.dataset.id); if (!it) break; closeSheet(); const { removeReq, ...rest } = it; await store.save(rest); toast('Kept'); } break;
+    case 'comment': {
+      const inp = $('#cmtText'); const text = inp.value.trim(); if (!text) break;
+      const base = state.items.get(sheetItem.id) || sheetItem;
+      const comments = [...(base.comments || []), { by: me(), text, at: Date.now() }];
+      sheetItem.comments = comments; inp.value = '';
+      $('#cmtList').innerHTML = cmtHTML(comments);
+      await store.save({ ...base, comments }); } break;
+    case 'flights': ev.stopPropagation(); openFlights(); break;
+    case 'saveFlights': {
+      const out = readLeg('out'), backL = readLeg('back');
+      if (out.depart && out.arrive && out.arrive.slice(0, 10) < out.depart.slice(0, 10)) { toast('Landing is before departure — check the dates'); break; }
+      const patch = { flights: { out, back: backL } };
+      const landDay = (out.arrive || out.depart || '').slice(0, 10);
+      if (landDay) {
+        patch.tripStart = landDay; patch.placeholderDates = false;
+        if (backL.depart) patch.tripDays = Math.max(1, Math.min(60, daysBetween(parseDate(landDay), parseDate(backL.depart.slice(0, 10))) + 1));
+      }
+      closeSheet(); await store.saveSettings(patch); toast('Flights saved'); } break;
+    case 'shareFlight': { const l = readLeg(el.dataset.k); const c = flightCode(l); const d = splitDT(l.depart);
+      shareText(`Our flight: ${l.airline ? l.airline + ' ' : ''}${c}${d ? ' on ' + fmt(d.date, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : ''}${l.from && l.to ? ` (${l.from} → ${l.to})` : ''}`, 'Our flight'); } break;
+    case 'saveMembers': {
+      const m = [$('#setM1').value.trim(), $('#setM2').value.trim()].filter(Boolean);
+      if (!m.length) break;
+      const pick = $('#setMe').selectedIndex; localStorage.setItem('me', m[pick] || m[0]);
+      await store.saveSettings({ members: m }); toast('Saved'); } break;
+    case 'setMe': localStorage.setItem('me', el.dataset.v); closeSheet(); render(); toast(`Hi ${el.dataset.v}!`); break;
+    case 'print': window.print(); break;
+    case 'shareTrip': shareText(tripText(), 'Lagos 2027 itinerary'); break;
+    case 'shareDay': shareText(`WellPlanned · Lagos 2027\n${dayText(Number(el.dataset.day))}`, dayLabel(Number(el.dataset.day))); break;
+    case 'picDay': dayPicture(Number(el.dataset.day)); break;
+    case 'icsDay': exportICS(Number(el.dataset.day)); break;
     case 'imgRemove': sheetImage = null; $('#imgPrev').hidden = true; el.remove(); break;
     case 'spotFilter': state.spotFilter = el.dataset.v; render(); break;
     case 'todoFilter': state.todoFilter = el.dataset.v; render(); break;
@@ -635,7 +910,7 @@ document.addEventListener('click', async ev => {
       if (start) { patch.placeholderDates = start === S().tripStart ? S().placeholderDates : false; patch.tripStart = start; }
       await store.saveSettings(patch); toast('Saved'); } break;
     case 'export': download(`lagos-planner-backup-${ymd(new Date())}.json`, JSON.stringify({ settings: S(), items: [...state.items.values()] }, null, 1), 'application/json'); break;
-    case 'ics': exportICS(); break;
+    case 'ics': exportICS(null); break;
     case 'saveCfg': { const c = parseConfig($('#cfgText').value); if (!c) { toast('That doesn’t look like a Firebase config'); break; }
       localStorage.setItem('fbConfig', JSON.stringify(c)); toast('Saved — reloading'); setTimeout(() => location.reload(), 600); } break;
     case 'signin': case 'signup': {
@@ -656,7 +931,17 @@ document.addEventListener('click', async ev => {
 document.addEventListener('submit', ev => {
   if (ev.target.id !== 'itemForm') return; ev.preventDefault();
   const out = collectForm(); if (!out) return;
-  closeSheet(); store.save(out); toast('Saved');
+  const prev = state.items.get(out.id);
+  if (prev) { out.votes = prev.votes; out.comments = prev.comments; out.removeReq = prev.removeReq; }
+  out.addedBy = out.addedBy || me();
+  let msg = 'Saved';
+  if (needsOk(out)) {
+    const keys = SPECS[out.kind].fields.flat().map(f => f.k).filter(k => !['done', 'paid'].includes(k));
+    const changed = !prev || keys.some(k => JSON.stringify(prev[k] ?? '') !== JSON.stringify(out[k] ?? ''));
+    if (changed) { out.votes = { [me()]: 'yes' }; if (prev) out.editedBy = me(); msg = `Saved — sent to ${others()} to agree`; }
+  }
+  if (out.removeReq === undefined) delete out.removeReq;
+  closeSheet(); store.save(out); toast(msg);
 });
 document.addEventListener('input', ev => {
   if (ev.target.id === 'spotSearch') { state.q = ev.target.value; renderSpotList(); }
@@ -703,4 +988,5 @@ async function boot() {
   await startLocal(); afterReady();
 }
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
+window.__wp = { state, render, store }; // handy for debugging
 boot();
